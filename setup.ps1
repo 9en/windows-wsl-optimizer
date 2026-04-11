@@ -24,13 +24,14 @@ param(
     # Slack 投稿先チャンネル (#general など) （省略可）
     [string]$SlackChannel,
     # タスクスケジューラ: report を実行する時刻 (HH:mm)
-    [string]$ReportTime = "08:00",
-    # タスクスケジューラ: cleanup を実行する時刻 (HH:mm)
-    [string]$CleanupTime = "03:00",
+    # タスクスケジューラ: 実行時刻 (HH:mm)
+    [string]$ScheduleTime = "20:00",
     # タスクスケジューラ登録をスキップ
     [switch]$SkipScheduler,
     # .wslconfig 生成をスキップ
-    [switch]$SkipWslConfig
+    [switch]$SkipWslConfig,
+    # 現在の設定状態を表示して終了
+    [switch]$Status
 )
 
 Set-StrictMode -Version Latest
@@ -46,6 +47,53 @@ if (-not $isAdmin) {
 Write-Host ("=" * 60)
 Write-Host "  Windows Memory Optimizer - Setup"
 Write-Host ("=" * 60)
+
+# ---- Status モード ----
+if ($Status) {
+    Write-Host "`n[.wslconfig]" -ForegroundColor Cyan
+    $wslConfigPath = "$env:USERPROFILE\.wslconfig"
+    if (Test-Path $wslConfigPath) {
+        Write-Host "  パス: $wslConfigPath" -ForegroundColor Green
+        Get-Content $wslConfigPath | ForEach-Object { Write-Host "  $_" }
+    } else {
+        Write-Host "  未作成" -ForegroundColor Yellow
+    }
+
+    Write-Host "`n[Slack 環境変数]" -ForegroundColor Cyan
+    $token   = [System.Environment]::GetEnvironmentVariable("SLACK_BOT_TOKEN", "User")
+    $channel = [System.Environment]::GetEnvironmentVariable("SLACK_CHANNEL", "User")
+    if ($token) {
+        $masked = $token.Substring(0, [math]::Min(10, $token.Length)) + "..."
+        Write-Host "  SLACK_BOT_TOKEN : $masked" -ForegroundColor Green
+    } else {
+        Write-Host "  SLACK_BOT_TOKEN : 未設定" -ForegroundColor Yellow
+    }
+    if ($channel) {
+        Write-Host "  SLACK_CHANNEL   : $channel" -ForegroundColor Green
+    } else {
+        Write-Host "  SLACK_CHANNEL   : 未設定" -ForegroundColor Yellow
+    }
+
+    Write-Host "`n[タスクスケジューラ]" -ForegroundColor Cyan
+    $task = Get-ScheduledTask -TaskName "MemoryOptimizer" -ErrorAction SilentlyContinue
+    if ($task) {
+        $info = $task | Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+        Write-Host "  状態           : $($task.State)" -ForegroundColor Green
+        Write-Host "  トリガー       : $($task.Triggers[0].StartBoundary)" -ForegroundColor Green
+        Write-Host "  実行コマンド   : $($task.Actions[0].Arguments)" -ForegroundColor Green
+        if ($info.LastRunTime -and $info.LastRunTime -ne [datetime]::MinValue) {
+            Write-Host "  前回実行       : $($info.LastRunTime)" -ForegroundColor Green
+            Write-Host "  前回結果       : $($info.LastTaskResult)" -ForegroundColor Green
+        } else {
+            Write-Host "  前回実行       : まだ実行されていません" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  未登録" -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    return
+}
 
 # ---- 1. .wslconfig 生成・調整 ----
 if (-not $SkipWslConfig) {
@@ -132,37 +180,23 @@ if (-not $SkipScheduler) {
         $ps5Cmd  = Get-Command powershell -ErrorAction SilentlyContinue
         $pwsh = if ($pwshCmd) { $pwshCmd.Source } elseif ($ps5Cmd) { $ps5Cmd.Source } else { "powershell.exe" }
 
-        $tasks = @(
-            @{
-                Name      = "MemoryOptimizer-Report"
-                Script    = "report.ps1"
-                Args      = "-Notify"
-                Time      = $ReportTime
-                Desc      = "毎日 $ReportTime にメモリレポートを生成・通知"
-            },
-            @{
-                Name      = "MemoryOptimizer-Cleanup"
-                Script    = "cleanup.ps1"
-                Args      = "-Notify"
-                Time      = $CleanupTime
-                Desc      = "毎日 $CleanupTime にメモリクリーンアップ・通知"
-            }
-        )
+        # 旧タスクがあれば削除
+        foreach ($old in @("MemoryOptimizer-Report", "MemoryOptimizer-Cleanup")) {
+            Unregister-ScheduledTask -TaskName $old -Confirm:$false -ErrorAction SilentlyContinue
+        }
 
-        foreach ($task in $tasks) {
-            try {
-                Unregister-ScheduledTask -TaskName $task.Name -Confirm:$false -ErrorAction SilentlyContinue
-                Register-ScheduledTask `
-                    -TaskName    $task.Name `
-                    -Action      (New-ScheduledTaskAction -Execute $pwsh -Argument "-NonInteractive -NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\$($task.Script)`" $($task.Args)") `
-                    -Trigger     (New-ScheduledTaskTrigger -Daily -At $task.Time) `
-                    -Settings    (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew) `
-                    -Description "windows-memory-optimizer: $($task.Desc)" `
-                    -RunLevel    Highest | Out-Null
-                Write-Host "   [$($task.Name)] 毎日 $($task.Time) に登録しました" -ForegroundColor Green
-            } catch {
-                Write-Host "   [$($task.Name)] 登録失敗: $_" -ForegroundColor Red
-            }
+        $taskName = "MemoryOptimizer"
+        try {
+            Register-ScheduledTask `
+                -TaskName    $taskName `
+                -Action      (New-ScheduledTaskAction -Execute $pwsh -Argument "-NonInteractive -NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\cleanup.ps1`" -Report -Notify") `
+                -Trigger     (New-ScheduledTaskTrigger -Daily -At $ScheduleTime) `
+                -Settings    (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew -StartWhenAvailable) `
+                -Description "windows-memory-optimizer: 毎日 $ScheduleTime にクリーンアップ→レポート生成・通知" `
+                -RunLevel    Highest | Out-Null
+            Write-Host "   [$taskName] 毎日 $ScheduleTime に登録しました（クリーンアップ→レポート→通知）" -ForegroundColor Green
+        } catch {
+            Write-Host "   [$taskName] 登録失敗: $_" -ForegroundColor Red
         }
     }
 }
