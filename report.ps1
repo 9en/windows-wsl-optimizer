@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     WSL2・Docker・プロセス別メモリ使用状況レポートを表示する
