@@ -20,7 +20,9 @@ param(
     [switch]$SkipWindowsCache,
     # 未使用Dockerボリュームを削除する（停止中コンテナのデータも消えるため要注意）
     [switch]$PruneVolumes,
-    [switch]$Notify
+    [switch]$Notify,
+    # クリーンアップ後にメモリレポートを表示する
+    [switch]$Report
 )
 
 Set-StrictMode -Version Latest
@@ -162,6 +164,10 @@ Write-Host ("=" * 60) -ForegroundColor White
 $_log.Add("")
 $_log.Add("実行前: $([math]::Round($memBefore / 1MB, 1)) GB  →  実行後: $($sysAfter.UsedGB) GB  (解放: $freed MB)")
 
-if ($Notify) {
+# ---- レポート出力 ----
+if ($Report) {
+    Write-Host ""
+    & "$PSScriptRoot\report.ps1" -Notify:$Notify
+} elseif ($Notify) {
     Send-SlackNotification -Message ("【Cleanup完了】`n" + ($_log -join "`n"))
 }

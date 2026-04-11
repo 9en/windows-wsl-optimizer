@@ -26,16 +26,43 @@ windows-memory-optimizer/
 - WSL2
 - Docker Desktop（WSL2 backend または Hyper-V backend）
 
+## 前提ソフトウェア
+
+### Git のインストール（任意）
+
+`git clone` でダウンロードする場合は Git が必要です（ZIP ダウンロードのみなら不要）。
+
+#### winget を使う場合（推奨）
+
+```powershell
+winget install --id Git.Git -e --source winget
+```
+
+インストール後、PowerShell を再起動して `git --version` で確認してください。
+
+#### 手動インストール
+
+1. https://git-scm.com/downloads/win にアクセス
+2. **"64-bit Git for Windows Setup"** をダウンロードして実行
+3. インストーラーの設定はデフォルトのままで OK
+4. インストール後、PowerShell を再起動
+
 ---
 
 ## クイックスタート
 
-### 1. クローン
+### 1. ダウンロード
+
+タスクスケジューラがスクリプトのフルパスを参照するため、移動しない場所に配置してください。
 
 ```powershell
+cd $HOME
 git clone https://github.com/9en/windows-memory-optimizer.git
 cd windows-memory-optimizer
 ```
+
+> **注意:** フォルダを移動するとタスクスケジューラの登録が壊れます。
+> 移動した場合は `.\setup.ps1` を再実行してください。
 
 ### 2. セットアップ（管理者権限のPowerShellで実行）
 
@@ -58,90 +85,9 @@ wsl --shutdown
 
 ---
 
-## 各スクリプトの使い方
-
-### report.ps1 — メモリレポート
-
-```powershell
-# レポートを表示
-.\report.ps1
-
-# レポートを表示してSlackにも通知
-.\report.ps1 -Notify
-```
-
-表示内容:
-- システム全体のメモリ使用量（グラフ付き）
-- WSL2 の vmmem 使用量・起動中ディストリビューション一覧
-- Docker コンテナ別メモリ使用量
-- 起動中 devcontainer の一覧
-- メモリ消費トッププロセス（上位10件）
-
-### cleanup.ps1 — クリーンアップ
-
-```powershell
-# クリーンアップ実行
-.\cleanup.ps1
-
-# 実際には何もしないドライラン（確認用）
-.\cleanup.ps1 -DryRun
-
-# クリーンアップ後に通知
-.\cleanup.ps1 -Notify
-
-# 特定のクリーンアップをスキップ
-.\cleanup.ps1 -SkipDocker -SkipWsl
-.\cleanup.ps1 -SkipWindowsCache
-
-# Dockerボリュームも削除する（停止中コンテナのデータが消えるため要注意）
-.\cleanup.ps1 -PruneVolumes
-```
-
-実行内容:
-1. WSL2 ページキャッシュ解放 (`echo 3 > /proc/sys/vm/drop_caches`)
-2. Docker: 停止コンテナ・未使用イメージ・ビルドキャッシュ・ネットワーク削除
-   - ボリューム削除はデフォルト**無効**（`-PruneVolumes` で有効化）
-3. Windowsの一時ファイル削除（`%TEMP%`, `%TMP%`, `C:\Windows\Temp`）
-4. DNS キャッシュクリア
-5. 高メモリプロセスの表示のみ（自動停止はしない）
-
-### notify.ps1 — Slack通知
-
-```powershell
-# 環境変数のトークン・チャンネルで送信
-.\notify.ps1 -Message "テストメッセージ"
-
-# パラメータで直接指定
-.\notify.ps1 -Token "xoxb-..." -Channel "#alerts" -Message "テスト"
-
-# タイトルと色を変更（good=緑 / warning=黄 / danger=赤 / #RRGGBB）
-.\notify.ps1 -Message "警告" -Title "Memory Alert" -Color "warning"
-```
-
-Slack App の Bot Token (`xoxb-...`) と `chat.postMessage` API を使って投稿します。
-
-### setup.ps1 — セットアップ
-
-```powershell
-# 全オプション
-.\setup.ps1 `
-    -WslMemoryGB 8 `
-    -WslProcessors 4 `
-    -SlackToken "xoxb-..." `
-    -SlackChannel "#general" `
-    -ReportTime "08:00" `
-    -CleanupTime "03:00"
-
-# .wslconfigだけ生成（タスクスケジューラ不要）
-.\setup.ps1 -SkipScheduler
-
-# Slackトークンだけ設定（.wslconfig不要）
-.\setup.ps1 -SkipWslConfig -SlackToken "xoxb-..." -SlackChannel "#general"
-```
-
----
-
 ## Slack App の設定
+
+Slack通知（`-Notify` オプション）を使う場合は、先にこのセクションの設定を行ってください。
 
 ### 必要な環境変数
 
@@ -219,22 +165,130 @@ Slackに通知が届けば設定完了です。
 
 ---
 
+## 各スクリプトの使い方
+
+### setup.ps1 — セットアップ
+
+```powershell
+# 全オプション
+.\setup.ps1 `
+    -WslMemoryGB 8 `
+    -WslProcessors 4 `
+    -SlackToken "xoxb-..." `
+    -SlackChannel "#general" `
+    -ScheduleTime "20:00"
+
+# .wslconfigだけ生成（タスクスケジューラ不要）
+.\setup.ps1 -SkipScheduler
+
+# Slackトークンだけ設定（.wslconfig不要）
+.\setup.ps1 -SkipWslConfig -SlackToken "xoxb-..." -SlackChannel "#general"
+
+# 現在の設定状態を確認
+.\setup.ps1 -Status
+```
+
+`-Status` を付けると、.wslconfig・Slack環境変数・タスクスケジューラの現在の設定を一覧表示します。
+
+### report.ps1 — メモリレポート
+
+```powershell
+# レポートを表示
+.\report.ps1
+
+# レポートを表示してSlackにも通知
+.\report.ps1 -Notify
+```
+
+表示内容:
+- システム全体のメモリ使用量（グラフ付き）
+- WSL2 の vmmem 使用量・起動中ディストリビューション一覧
+- Docker コンテナ別メモリ使用量
+- 起動中 devcontainer の一覧
+- メモリ消費トッププロセス（上位10件）
+
+### cleanup.ps1 — クリーンアップ
+
+```powershell
+# クリーンアップ実行
+.\cleanup.ps1
+
+# 実際には何もしないドライラン（確認用）
+.\cleanup.ps1 -DryRun
+
+# クリーンアップ後に通知
+.\cleanup.ps1 -Notify
+
+# 特定のクリーンアップをスキップ
+.\cleanup.ps1 -SkipDocker -SkipWsl
+.\cleanup.ps1 -SkipWindowsCache
+
+# Dockerボリュームも削除する（停止中コンテナのデータが消えるため要注意）
+.\cleanup.ps1 -PruneVolumes
+
+# クリーンアップ後にメモリレポートも表示
+.\cleanup.ps1 -Report
+```
+
+実行内容:
+1. WSL2 ページキャッシュ解放 (`echo 3 > /proc/sys/vm/drop_caches`)
+2. Docker: 停止コンテナ・未使用イメージ・ビルドキャッシュ・ネットワーク削除
+   - ボリューム削除はデフォルト**無効**（`-PruneVolumes` で有効化）
+3. Windowsの一時ファイル削除（`%TEMP%`, `%TMP%`, `C:\Windows\Temp`）
+4. DNS キャッシュクリア
+5. 高メモリプロセスの表示のみ（自動停止はしない）
+
+### notify.ps1 — Slack通知
+
+```powershell
+# 環境変数のトークン・チャンネルで送信
+.\notify.ps1 -Message "テストメッセージ"
+
+# パラメータで直接指定
+.\notify.ps1 -Token "xoxb-..." -Channel "#alerts" -Message "テスト"
+
+# タイトルと色を変更（good=緑 / warning=黄 / danger=赤 / #RRGGBB）
+.\notify.ps1 -Message "警告" -Title "Memory Alert" -Color "warning"
+```
+
+Slack App の Bot Token (`xoxb-...`) と `chat.postMessage` API を使って投稿します。
+
+---
+
 ## タスクスケジューラ
 
-`setup.ps1` を管理者権限で実行すると、以下のタスクが登録されます:
+`setup.ps1` を管理者権限で実行すると、以下のタスクが登録されます。
+予定時刻にPCがスリープ・シャットダウンしていた場合は、次回PC起動時に自動実行されます（`StartWhenAvailable`）。
 
 | タスク名 | 実行タイミング | 内容 |
 |---------|-------------|------|
-| `MemoryOptimizer-Report` | 毎日 08:00 | レポート生成・通知 |
-| `MemoryOptimizer-Cleanup` | 毎日 03:00 | クリーンアップ・通知 |
+| `MemoryOptimizer` | 毎日 20:00 | クリーンアップ → レポート生成 → Slack通知 |
 
 確認・編集:
 ```powershell
-# タスク一覧確認
-Get-ScheduledTask | Where-Object { $_.TaskName -like "MemoryOptimizer-*" }
+# タスク確認
+Get-ScheduledTask -TaskName "MemoryOptimizer"
 
 # タスクスケジューラGUIを開く
 taskschd.msc
+```
+
+---
+
+## .wslconfig について
+
+`setup.ps1` が `%USERPROFILE%\.wslconfig` を自動生成します。
+既存のファイルがある場合は `.wslconfig.bak_YYYYMMDDHHMMSS` としてバックアップされます。
+
+生成される設定例（物理メモリ16GB・12コアの場合）:
+
+```ini
+[wsl2]
+memory=8GB        # 物理メモリの50%
+processors=6      # CPUコアの50%
+swap=2GB          # メモリの25%
+pageReporting=true
+localhostForwarding=true
 ```
 
 ---
@@ -286,24 +340,6 @@ Write-Host "CPU名      : $($cpu.Name)"
 
 `processors` は論理コア数の半分程度を目安にしてください。  
 `setup.ps1` はこれらを自動計算して設定します（`-WslMemoryGB` で上書き可能）。
-
----
-
-## .wslconfig について
-
-`setup.ps1` が `%USERPROFILE%\.wslconfig` を自動生成します。
-既存のファイルがある場合は `.wslconfig.bak_YYYYMMDDHHMMSS` としてバックアップされます。
-
-生成される設定例（物理メモリ16GB・12コアの場合）:
-
-```ini
-[wsl2]
-memory=8GB        # 物理メモリの50%
-processors=6      # CPUコアの50%
-swap=2GB          # メモリの25%
-pageReporting=true
-localhostForwarding=true
-```
 
 ---
 
