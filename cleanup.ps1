@@ -46,7 +46,7 @@ Write-Host ("=" * 60) -ForegroundColor White
 if (-not $SkipWsl) {
     Write-LogLine -Log $_log step "WSL2 メモリ解放"
     try {
-        $vmmem = Get-Process -Name "vmmem" -ErrorAction SilentlyContinue
+        $vmmem = Get-Process -Name "vmmem", "vmmemWSL" -ErrorAction SilentlyContinue
         if ($vmmem) {
             if ($DryRun) {
                 Write-LogLine -Log $_log skip "WSL2 ページキャッシュ解放 (dry run)"
@@ -69,8 +69,9 @@ if (-not $SkipWsl) {
 if (-not $SkipDocker) {
     Write-LogLine -Log $_log step "Docker キャッシュクリア"
     try {
-        docker info 2>$null | Out-Null
-        if ($LASTEXITCODE -ne 0) {
+        if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+            Write-LogLine -Log $_log skip "Docker がインストールされていません"
+        } elseif (-not (docker info 2>$null) -or $LASTEXITCODE -ne 0) {
             Write-LogLine -Log $_log skip "Docker は起動していません"
         } elseif ($DryRun) {
             Write-LogLine -Log $_log skip "Docker prune (dry run)"

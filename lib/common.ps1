@@ -102,7 +102,7 @@ function Get-WslMemory {
     #>
     $result = [PSCustomObject]@{ Running = $false; MemMB = 0; Instances = @() }
     try {
-        $vmmem = Get-Process -Name "vmmem" -ErrorAction SilentlyContinue
+        $vmmem = Get-Process -Name "vmmem", "vmmemWSL" -ErrorAction SilentlyContinue
         if (-not $vmmem) { return $result }
 
         $result.Running = $true
@@ -129,6 +129,7 @@ function Get-DockerMemory {
     #>
     $result = [PSCustomObject]@{ Running = $false; TotalMB = 0; Containers = @() }
     try {
+        if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return $result }
         docker info 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) { return $result }
         $result.Running = $true
