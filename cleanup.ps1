@@ -51,10 +51,16 @@ if (-not $SkipWsl) {
             if ($DryRun) {
                 Write-LogLine -Log $_log skip "WSL2 ページキャッシュ解放 (dry run)"
             } else {
-                $distros = wsl --list --quiet 2>$null | Where-Object { $_ -match '\S' }
+                $distros = wsl --list --quiet 2>$null |
+                    ForEach-Object { ($_ -replace '\x00', '').Trim() } |
+                    Where-Object { $_ -match '^\S+$' }
                 foreach ($distro in $distros) {
-                    wsl -d $distro.Trim() --exec sh -c "sync && echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null 2>&1" 2>$null
-                    Write-LogLine -Log $_log done "[$distro] ページキャッシュを解放しました"
+                    wsl -d $distro --exec sh -c "sync && echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null 2>&1" 2>$null
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-LogLine -Log $_log done "[$distro] ページキャッシュを解放しました"
+                    } else {
+                        Write-LogLine -Log $_log fail "[$distro] ページキャッシュ解放に失敗しました"
+                    }
                 }
             }
         } else {

@@ -109,6 +109,7 @@ function Get-WslMemory {
         $result.MemMB   = [math]::Round(($vmmem | Measure-Object WorkingSet64 -Sum).Sum / 1MB, 1)
 
         $result.Instances = wsl --list --verbose 2>$null |
+            ForEach-Object { ($_ -replace '\x00', '').Trim() } |
             Select-Object -Skip 1 |
             Where-Object { $_ -match '\S' } |
             ForEach-Object {
