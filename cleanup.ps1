@@ -82,13 +82,17 @@ if (-not $SkipWsl) {
 if (-not $SkipDocker) {
     Write-LogLine -Log $_log step "Docker キャッシュクリア"
     try {
-        if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-            Write-LogLine -Log $_log skip "Docker がインストールされていません"
-        } elseif (-not (docker info 2>$null) -or $LASTEXITCODE -ne 0) {
-            Write-LogLine -Log $_log skip "Docker は起動していません"
+        # Docker コマンドの検出: Windows側 → WSL2内 の順で探す
+        $dockerCmd = Get-DockerCommand
+
+        if (-not $dockerCmd) {
+            Write-LogLine -Log $_log skip "Docker が見つかりません（Windows / WSL2 両方を確認済み）"
         } else {
+            $dockerSource = if ($dockerCmd -eq "wsl docker") { "WSL2" } else { "Windows" }
+            Write-LogLine -Log $_log done "Docker を検出しました ($dockerSource)"
+
             # ディスク使用量を表示
-            $dfOutput = docker system df 2>$null
+            $dfOutput = Invoke-DockerCommand $dockerCmd "system df"
             if ($dfOutput) {
                 Write-Host "   [Docker ディスク使用量]" -ForegroundColor White
                 $dfOutput | ForEach-Object { Write-Host "   $_" }
@@ -99,29 +103,31 @@ if (-not $SkipDocker) {
             if ($DryRun) {
                 Write-LogLine -Log $_log skip "Docker prune (dry run)"
             } else {
-                docker container prune -f 2>$null | Out-Null; Write-LogLine -Log $_log done "停止コンテナを削除しました"
+                Invoke-DockerCommand $dockerCmd "container prune -f" | Out-Null
+                Write-LogLine -Log $_log done "停止コンテナを削除しました"
 
                 if ($SkipPruneBuildCache) {
-                    docker builder prune -f 2>$null | Out-Null
+                    Invoke-DockerCommand $dockerCmd "builder prune -f" | Out-Null
                     Write-LogLine -Log $_log done "未使用ビルドキャッシュを削除しました（最近使用分は保持）"
                 } else {
-                    docker builder prune -a -f 2>$null | Out-Null
+                    Invoke-DockerCommand $dockerCmd "builder prune -a -f" | Out-Null
                     Write-LogLine -Log $_log done "ビルドキャッシュを全て削除しました"
                 }
 
-                docker network prune -f 2>$null | Out-Null; Write-LogLine -Log $_log done "未使用ネットワークを削除しました"
+                Invoke-DockerCommand $dockerCmd "network prune -f" | Out-Null
+                Write-LogLine -Log $_log done "未使用ネットワークを削除しました"
 
                 if ($SkipPruneImages) {
-                    docker image prune -f 2>$null | Out-Null
+                    Invoke-DockerCommand $dockerCmd "image prune -f" | Out-Null
                     Write-LogLine -Log $_log done "未使用イメージ（タグなし）を削除しました"
                 } else {
-                    docker image prune -a -f 2>$null | Out-Null
+                    Invoke-DockerCommand $dockerCmd "image prune -a -f" | Out-Null
                     Write-LogLine -Log $_log done "未使用イメージを全て削除しました"
                 }
 
                 if ($PruneVolumes) {
                     Write-Host "   [警告] 未使用ボリュームを削除します。停止中コンテナのデータが失われる可能性があります。" -ForegroundColor Red
-                    docker volume prune -f 2>$null | Out-Null
+                    Invoke-DockerCommand $dockerCmd "volume prune -f" | Out-Null
                     Write-LogLine -Log $_log done "未使用ボリュームを削除しました"
                 } else {
                     Write-LogLine -Log $_log skip "Dockerボリューム削除はスキップ（有効化: -PruneVolumes）"

@@ -124,22 +124,60 @@ function Get-WslMemory {
     return $result
 }
 
+function Get-DockerCommand {
+    <#
+    .SYNOPSIS  利用可能な docker コマンドを検出する (Windows側 → WSL2内)
+    .OUTPUTS   [string] "docker" / "wsl docker" / $null
+    #>
+
+    # Windows 側の docker を確認
+    if (Get-Command docker -ErrorAction SilentlyContinue) {
+        docker info 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { return "docker" }
+    }
+
+    # WSL2 内の docker を確認 (wsl コマンドが無い環境ではスキップ)
+    if (Get-Command wsl -ErrorAction SilentlyContinue) {
+        $wslDocker = wsl which docker 2>$null
+        if ($LASTEXITCODE -eq 0 -and $wslDocker) {
+            wsl docker info 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { return "wsl docker" }
+        }
+    }
+
+    return $null
+}
+
+function Invoke-DockerCommand {
+    <#
+    .SYNOPSIS  Get-DockerCommand で検出した docker コマンドを安全に実行する
+    .PARAMETER DockerCmd  Get-DockerCommand の戻り値 ("docker" / "wsl docker")
+    .PARAMETER Arguments  docker サブコマンドと引数 (例: "container prune -f")
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$DockerCmd,
+        [Parameter(Mandatory)]
+        [string]$Arguments
+    )
+    Invoke-Expression "$DockerCmd $Arguments 2>`$null"
+}
+
 function Get-DockerMemory {
     <#
     .SYNOPSIS  Docker コンテナ別メモリ使用量を取得する
     #>
     $result = [PSCustomObject]@{ Running = $false; TotalMB = 0; Containers = @() }
     try {
-        if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return $result }
-        docker info 2>$null | Out-Null
-        if ($LASTEXITCODE -ne 0) { return $result }
+        $dockerCmd = Get-DockerCommand
+        if (-not $dockerCmd) { return $result }
         $result.Running = $true
 
-        $containerLines = docker ps --format "{{.ID}}`t{{.Names}}`t{{.Image}}" 2>$null
+        $containerLines = Invoke-DockerCommand $dockerCmd "ps --format '{{.ID}}`t{{.Names}}`t{{.Image}}'"
         if (-not $containerLines) { return $result }
 
         $statsMap = @{}
-        docker stats --no-stream --format "{{.ID}}`t{{.MemUsage}}" 2>$null | ForEach-Object {
+        Invoke-DockerCommand $dockerCmd "stats --no-stream --format '{{.ID}}`t{{.MemUsage}}'" | ForEach-Object {
             $parts = $_ -split "`t"
             if ($parts.Count -ge 2) { $statsMap[$parts[0].Substring(0, 12)] = $parts[1] }
         }
