@@ -231,10 +231,7 @@ Slackに通知が届けば設定完了です。
 ```
 
 実行内容:
-1. WSL2 ページキャッシュ解放 + ディスククリーンアップ
-   - ページキャッシュ解放 (`echo 3 > /proc/sys/vm/drop_caches`)
-   - systemd journalログ縮小(100MB)、aptキャッシュ・不要パッケージ削除
-   - 不要snapパッケージ削除、VS Code Serverの古いバージョン削除、/tmpクリア
+1. WSL2 ページキャッシュ解放 (`echo 3 > /proc/sys/vm/drop_caches`)
 2. Docker: 停止コンテナ・未使用イメージ(タグなし)・ビルドキャッシュ(全て)・ネットワーク削除 + ディスク使用量表示
    - タグ付きイメージも全削除: `-PruneImages`
    - ビルドキャッシュ全削除をスキップ: `-SkipPruneBuildCache`(最近使用分は保持)
