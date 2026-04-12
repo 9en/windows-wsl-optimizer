@@ -44,6 +44,47 @@ function Get-MemoryBar {
     "$bar $("{0:0.0}" -f ($ratio * 100))%"
 }
 
+# ---- ディスク情報 ----
+
+function Get-DiskInfo {
+    <#
+    .SYNOPSIS  論理ドライブのディスク使用情報を取得する
+    .OUTPUTS   [PSCustomObject[]] Drive / TotalGB / UsedGB / FreeGB
+    #>
+    Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $totalGB = [math]::Round($_.Size / 1GB, 1)
+            $freeGB  = [math]::Round($_.FreeSpace / 1GB, 1)
+            [PSCustomObject]@{
+                Drive   = $_.DeviceID
+                TotalGB = $totalGB
+                UsedGB  = [math]::Round($totalGB - $freeGB, 1)
+                FreeGB  = $freeGB
+            }
+        }
+}
+
+function Get-VhdxInfo {
+    <#
+    .SYNOPSIS  WSL2 の ext4.vhdx ファイルサイズを取得する
+    .OUTPUTS   [PSCustomObject[]] Path / SizeGB
+    #>
+    $searchDirs = @(
+        "$env:LOCALAPPDATA\Packages"
+        "$env:LOCALAPPDATA\Docker"
+    )
+    foreach ($dir in $searchDirs) {
+        if (-not (Test-Path $dir)) { continue }
+        Get-ChildItem -Path $dir -Filter "ext4.vhdx" -Recurse -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                [PSCustomObject]@{
+                    Path   = $_.FullName
+                    SizeGB = [math]::Round($_.Length / 1GB, 1)
+                }
+            }
+    }
+}
+
 # ---- ログ出力（cleanup.ps1 用） ----
 
 function Write-LogLine {

@@ -75,6 +75,22 @@ if ($docker.Running) {
     $lines.Add("  Docker is not running")
 }
 
+$disks = Get-DiskInfo
+$lines.Add("")
+$lines.Add("[DISK USAGE]")
+foreach ($d in $disks) {
+    $lines.Add("  $($d.Drive)  Total: $($d.TotalGB) GB  Used: $($d.UsedGB) GB  Free: $($d.FreeGB) GB  $(Get-MemoryBar -UsedGB $d.UsedGB -TotalGB $d.TotalGB)")
+}
+
+$vhdxFiles = Get-VhdxInfo
+if ($vhdxFiles) {
+    $lines.Add("")
+    $lines.Add("[WSL2 VIRTUAL DISKS]")
+    foreach ($v in $vhdxFiles) {
+        $lines.Add("  $($v.SizeGB) GB  $($v.Path)")
+    }
+}
+
 $lines.Add("")
 $lines.Add("[TOP PROCESSES (by memory)]")
 foreach ($p in (Get-TopProcesses -Top 10)) {
