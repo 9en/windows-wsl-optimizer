@@ -84,19 +84,27 @@ if (-not $SkipWsl) {
     Write-LogLine -Log $_log step "WSL2 ディスククリーンアップ"
     try {
         foreach ($distro in $distros) {
-            if ($DryRun) {
-                Write-LogLine -Log $_log skip "[$distro] WSL2 ディスククリーンアップ (dry run)"
-                continue
-            }
+            # 各項目のサイズを取得して表示する関数
+            $getSizeMB = { param($path) [math]::Round([decimal](wsl -d $distro --exec bash -c "du -sm $path 2>/dev/null | cut -f1" 2>$null), 0) }
 
             # systemd ジャーナルログを100MBに縮小
-            wsl -d $distro --exec sudo journalctl --vacuum-size=100M 2>$null | Out-Null
-            Write-LogLine -Log $_log done "[$distro] journalログを100MBに縮小"
+            $journalMB = & $getSizeMB "/var/log/journal"
+            if ($DryRun) {
+                Write-LogLine -Log $_log skip "[$distro] journalログ ($journalMB MB → 100MB に縮小予定)"
+            } else {
+                wsl -d $distro --exec sudo journalctl --vacuum-size=100M 2>$null | Out-Null
+                Write-LogLine -Log $_log done "[$distro] journalログを100MBに縮小 (${journalMB}MB → 100MB)"
+            }
 
             # apt キャッシュクリア + 不要パッケージ削除
-            wsl -d $distro --exec sudo apt clean 2>$null | Out-Null
-            wsl -d $distro --exec sudo apt autoremove -y 2>$null | Out-Null
-            Write-LogLine -Log $_log done "[$distro] aptキャッシュ・不要パッケージを削除"
+            $cacheMB = & $getSizeMB "/var/cache/apt"
+            if ($DryRun) {
+                Write-LogLine -Log $_log skip "[$distro] aptキャッシュ ($cacheMB MB 削除予定)"
+            } else {
+                wsl -d $distro --exec sudo apt clean 2>$null | Out-Null
+                wsl -d $distro --exec sudo apt autoremove -y 2>$null | Out-Null
+                Write-LogLine -Log $_log done "[$distro] aptキャッシュ・不要パッケージを削除 ($cacheMB MB)"
+            }
 
             # 不要な snap パッケージを削除（WSL2では不要なもの）
             $snapList = wsl -d $distro --exec snap list 2>$null
@@ -105,28 +113,44 @@ if (-not $SkipWsl) {
                 foreach ($snap in $unneededSnaps) {
                     $hasSnap = wsl -d $distro --exec snap list $snap 2>$null
                     if ($LASTEXITCODE -eq 0 -and $hasSnap) {
-                        wsl -d $distro --exec sudo snap remove $snap 2>$null | Out-Null
-                        Write-LogLine -Log $_log done "[$distro] snap '$snap' を削除"
+                        $snapMB = & $getSizeMB "/snap/$snap"
+                        if ($DryRun) {
+                            Write-LogLine -Log $_log skip "[$distro] snap '$snap' ($snapMB MB 削除予定)"
+                        } else {
+                            wsl -d $distro --exec sudo snap remove $snap 2>$null | Out-Null
+                            Write-LogLine -Log $_log done "[$distro] snap '$snap' を削除 ($snapMB MB)"
+                        }
                     }
                 }
             }
 
             # VS Code Server の古いバージョンを削除（cli/bin それぞれ最新1つを残す）
-            wsl -d $distro --exec bash -c '
-                for subdir in cli bin; do
-                    dir=~/.vscode-server/$subdir
-                    if [ -d "$dir" ]; then
-                        ls -t "$dir/" 2>/dev/null | tail -n +2 | while read d; do
-                            rm -rf "$dir/$d"
-                        done
-                    fi
-                done
-            ' 2>$null
-            Write-LogLine -Log $_log done "[$distro] VS Code Server の古いバージョンをクリーンアップ"
+            $vscodeMB = & $getSizeMB "~/.vscode-server"
+            $vscodeRemoteMB = & $getSizeMB "~/.vscode-remote-containers"
+            if ($DryRun) {
+                Write-LogLine -Log $_log skip "[$distro] VS Code Server ($vscodeMB MB) + remote-containers ($vscodeRemoteMB MB) 古いバージョン削除予定"
+            } else {
+                wsl -d $distro --exec bash -c '
+                    for subdir in cli bin; do
+                        dir=~/.vscode-server/$subdir
+                        if [ -d "$dir" ]; then
+                            ls -t "$dir/" 2>/dev/null | tail -n +2 | while read d; do
+                                rm -rf "$dir/$d"
+                            done
+                        fi
+                    done
+                ' 2>$null
+                Write-LogLine -Log $_log done "[$distro] VS Code Server の古いバージョンをクリーンアップ"
+            }
 
             # tmp ディレクトリのクリーンアップ
-            wsl -d $distro --exec sudo rm -rf /tmp/* 2>$null
-            Write-LogLine -Log $_log done "[$distro] /tmp をクリア"
+            $tmpMB = & $getSizeMB "/tmp"
+            if ($DryRun) {
+                Write-LogLine -Log $_log skip "[$distro] /tmp ($tmpMB MB 削除予定)"
+            } else {
+                wsl -d $distro --exec sudo rm -rf /tmp/* 2>$null
+                Write-LogLine -Log $_log done "[$distro] /tmp をクリア ($tmpMB MB)"
+            }
         }
     } catch {
         Write-LogLine -Log $_log fail "WSL2 ディスククリーンアップ中にエラー: $_"
