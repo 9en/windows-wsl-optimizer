@@ -78,10 +78,10 @@ if ($docker.Running) {
 $lines.Add("")
 $lines.Add("[TOP PROCESSES (by memory)]")
 foreach ($p in (Get-TopProcesses -Top 10)) {
-    $pName = ([string]$p.Name).PadRight(30)
-    $pId   = ([string]$p.PID).PadRight(6)
-    $pMem  = ([string]$p.MemMB).PadLeft(8)
-    $lines.Add("  $pName PID:$pId $pMem MB")
+    $procName = ([string]$p.Name).PadRight(30)
+    $procPid  = ([string]$p.PID).PadRight(6)
+    $procMem  = ([string]$p.MemMB).PadLeft(8)
+    $lines.Add("  $procName PID:$procPid $procMem MB")
 }
 
 $lines.Add("")
