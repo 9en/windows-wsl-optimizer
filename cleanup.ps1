@@ -42,6 +42,7 @@ $_log = [System.Collections.Generic.List[string]]::new()
 
 $timestamp  = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 $memBefore  = (Get-SystemMemoryInfo).UsedKB   # クリーンアップ前の使用量
+$diskBefore = (Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue).FreeSpace
 
 Write-Host ("=" * 60) -ForegroundColor White
 Write-Host "  Windows Memory Optimizer - Cleanup" -ForegroundColor White
@@ -139,7 +140,69 @@ if (-not $SkipDocker) {
     }
 }
 
-# ---- 3. Windows 一時ファイル削除 ----
+# ---- 3. WSL2 仮想ディスク (vhdx) 圧縮 ----
+if (-not $SkipWsl) {
+    Write-LogLine -Log $_log step "WSL2 仮想ディスク圧縮"
+    try {
+        # vhdx ファイルを検索（複数の既知パスを走査）
+        $vhdxSearchPaths = @(
+            "$env:LOCALAPPDATA\Packages\*\LocalState\ext4.vhdx",
+            "$env:LOCALAPPDATA\Docker\wsl\*\ext4.vhdx"
+        )
+        $vhdxPaths = @()
+        foreach ($pattern in $vhdxSearchPaths) {
+            $found = Get-Item $pattern -ErrorAction SilentlyContinue
+            if ($found) { $vhdxPaths += $found }
+        }
+        $vhdxPaths = $vhdxPaths | Select-Object -Unique
+
+        if ($vhdxPaths.Count -eq 0) {
+            Write-LogLine -Log $_log skip "vhdx ファイルが見つかりません"
+        } elseif ($DryRun) {
+            foreach ($vhdx in $vhdxPaths) {
+                $sizeMB = [math]::Round($vhdx.Length / 1MB, 0)
+                Write-LogLine -Log $_log skip "$($vhdx.FullName) ($sizeMB MB, dry run)"
+            }
+        } else {
+            # WSL2 をシャットダウンしてから圧縮する必要がある
+            Write-Host "   WSL2 をシャットダウンしています..." -ForegroundColor Yellow
+            wsl --shutdown 2>$null
+            Start-Sleep -Seconds 3
+
+            foreach ($vhdx in $vhdxPaths) {
+                $sizeBeforeMB = [math]::Round($vhdx.Length / 1MB, 0)
+                Write-Host "   圧縮中: $($vhdx.FullName) ($sizeBeforeMB MB)" -ForegroundColor White
+
+                try {
+                    $diskpartScript = @"
+select vdisk file="$($vhdx.FullName)"
+attach vdisk readonly
+compact vdisk
+detach vdisk
+"@
+                    $tmpFile = [System.IO.Path]::GetTempFileName()
+                    Set-Content -Path $tmpFile -Value $diskpartScript -Encoding ASCII
+                    diskpart /s $tmpFile 2>&1 | Out-Null
+                    Remove-Item $tmpFile -ErrorAction SilentlyContinue
+
+                    # 圧縮後のサイズを取得
+                    $vhdxAfter = Get-Item $vhdx.FullName -ErrorAction SilentlyContinue
+                    if ($vhdxAfter) {
+                        $sizeAfterMB = [math]::Round($vhdxAfter.Length / 1MB, 0)
+                        $freedMB = $sizeBeforeMB - $sizeAfterMB
+                        Write-LogLine -Log $_log done "$($vhdx.Name): $sizeBeforeMB MB → $sizeAfterMB MB (解放: $freedMB MB)"
+                    }
+                } catch {
+                    Write-LogLine -Log $_log fail "$($vhdx.Name) の圧縮に失敗: $_"
+                }
+            }
+        }
+    } catch {
+        Write-LogLine -Log $_log fail "vhdx 圧縮中にエラー: $_"
+    }
+}
+
+# ---- 4. Windows 一時ファイル削除 ----
 if (-not $SkipWindowsCache) {
     Write-LogLine -Log $_log step "Windows 一時ファイル・キャッシュクリア"
 
@@ -179,7 +242,7 @@ if (-not $SkipWindowsCache) {
     }
 }
 
-# ---- 4. 高メモリプロセスの表示（停止はしない）----
+# ---- 5. 高メモリプロセスの表示（停止はしない）----
 Write-LogLine -Log $_log step "高メモリプロセスの確認 (500MB超、参考表示のみ)"
 $highMemProcs = Get-TopProcesses -Top 5 | Where-Object { $_.MemMB -gt 500 }
 
@@ -192,23 +255,49 @@ if ($highMemProcs) {
 }
 
 # ---- サマリー ----
-$sysAfter = Get-SystemMemoryInfo
-$freed    = [math]::Round(($memBefore - $sysAfter.UsedKB) / 1KB, 1)
+$sysAfter    = Get-SystemMemoryInfo
+$memBeforeGB = [math]::Round($memBefore / 1MB, 1)
+$memFreed    = [math]::Round(($memBefore - $sysAfter.UsedKB) / 1KB, 1)
+$diskAfter   = (Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue).FreeSpace
+
+$hasDiskInfo  = $diskBefore -and $diskAfter
+if ($hasDiskInfo) {
+    $diskBeforeGB = [math]::Round($diskBefore / 1GB, 1)
+    $diskAfterGB  = [math]::Round($diskAfter / 1GB, 1)
+    $diskFreedGB  = [math]::Round(($diskAfter - $diskBefore) / 1GB, 1)
+}
 
 Write-Host ""
 Write-Host ("=" * 60) -ForegroundColor White
 Write-Host "  クリーンアップ完了" -ForegroundColor Green
-Write-Host "  実行前 : $([math]::Round($memBefore / 1MB, 1)) GB 使用中" -ForegroundColor White
+
+Write-Host "  [メモリ]" -ForegroundColor Cyan
+Write-Host "  実行前 : $memBeforeGB GB 使用中" -ForegroundColor White
 Write-Host "  実行後 : $($sysAfter.UsedGB) GB 使用中" -ForegroundColor White
-if ($freed -gt 0) {
-    Write-Host "  解放量 : $freed MB" -ForegroundColor Green
+if ($memFreed -gt 0) {
+    Write-Host "  解放量 : $memFreed MB" -ForegroundColor Green
 } else {
-    Write-Host "  解放量 : $freed MB (OS再利用待ち)" -ForegroundColor Yellow
+    Write-Host "  解放量 : $memFreed MB (OS再利用待ち)" -ForegroundColor Yellow
 }
+
+if ($hasDiskInfo) {
+    Write-Host "  [ディスク C:]" -ForegroundColor Cyan
+    Write-Host "  実行前 : $diskBeforeGB GB 空き" -ForegroundColor White
+    Write-Host "  実行後 : $diskAfterGB GB 空き" -ForegroundColor White
+    if ($diskFreedGB -gt 0) {
+        Write-Host "  回復量 : $diskFreedGB GB" -ForegroundColor Green
+    } else {
+        Write-Host "  回復量 : $diskFreedGB GB" -ForegroundColor Yellow
+    }
+}
+
 Write-Host ("=" * 60) -ForegroundColor White
 
 $_log.Add("")
-$_log.Add("実行前: $([math]::Round($memBefore / 1MB, 1)) GB  →  実行後: $($sysAfter.UsedGB) GB  (解放: $freed MB)")
+$_log.Add("メモリ: $memBeforeGB GB → $($sysAfter.UsedGB) GB (解放: $memFreed MB)")
+if ($hasDiskInfo) {
+    $_log.Add("ディスク C: $diskBeforeGB GB → $diskAfterGB GB 空き (回復: $diskFreedGB GB)")
+}
 
 # ---- レポート出力 ----
 if ($Report) {

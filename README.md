@@ -236,9 +236,10 @@ Slackに通知が届けば設定完了です。
    - イメージ全削除をスキップ: `-SkipPruneImages`(タグなしのみ削除)
    - ビルドキャッシュ全削除をスキップ: `-SkipPruneBuildCache`(最近使用分は保持)
    - ボリューム削除はデフォルト無効(`-PruneVolumes` で有効化)
-3. Windowsの一時ファイル削除（`%TEMP%`, `%TMP%`, `C:\Windows\Temp`）
-4. DNS キャッシュクリア
-5. 高メモリプロセスの表示のみ（自動停止はしない）
+3. WSL2 仮想ディスク(vhdx)圧縮 — WSL2をシャットダウンして `diskpart` で圧縮し、Cドライブの空きを回復
+4. Windowsの一時ファイル削除（`%TEMP%`, `%TMP%`, `C:\Windows\Temp`）
+5. DNS キャッシュクリア
+6. 高メモリプロセスの表示のみ（自動停止はしない）
 
 ### notify.ps1 — Slack通知
 
