@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    windows-memory-optimizer 共通ユーティリティ
+    windows-wsl-optimizer 共通ユーティリティ
 .DESCRIPTION
     report.ps1 / cleanup.ps1 / setup.ps1 から dot-source で読み込む共通関数。
     . "$PSScriptRoot\..\lib\common.ps1"
@@ -246,7 +246,7 @@ function Send-SlackNotification {
                 title     = $Title
                 text      = $Message
                 color     = $hexColor
-                footer    = "windows-memory-optimizer"
+                footer    = "windows-wsl-optimizer"
                 ts        = $unixTs
                 mrkdwn_in = @("text")
             }
