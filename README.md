@@ -225,17 +225,20 @@ Slackに通知が届けば設定完了です。
 .\cleanup.ps1 -SkipWindowsCache     # Windows一時ファイル/DNS削除をスキップ
 .\cleanup.ps1 -SkipPruneBuildCache  # ビルドキャッシュは最近使用分を保持
 
-# 追加の削除オプション（デフォルト無効）
+# 追加の削除オプション
 .\cleanup.ps1 -PruneImages          # 未使用Dockerイメージを全て削除（タグ付き含む）
-.\cleanup.ps1 -PruneVolumes         # 未使用Dockerボリュームも削除（データ消失リスクあり）
+.\cleanup.ps1 -SkipPruneVolumes     # 未使用Dockerボリュームの削除をスキップ
 ```
 
 実行内容:
-1. WSL2 ページキャッシュ解放 (`echo 3 > /proc/sys/vm/drop_caches`)
+1. WSL2 ページキャッシュ解放 + ディスククリーンアップ
+   - ページキャッシュ解放 (`echo 3 > /proc/sys/vm/drop_caches`)
+   - systemd journalログ縮小(100MB)、aptキャッシュ・不要パッケージ削除
+   - 不要snapパッケージ削除、VS Code Serverの古いバージョン削除、/tmpクリア
 2. Docker: 停止コンテナ・未使用イメージ(タグなし)・ビルドキャッシュ(全て)・ネットワーク削除 + ディスク使用量表示
    - タグ付きイメージも全削除: `-PruneImages`
    - ビルドキャッシュ全削除をスキップ: `-SkipPruneBuildCache`(最近使用分は保持)
-   - ボリューム削除はデフォルト無効(`-PruneVolumes` で有効化)
+   - ボリューム削除はデフォルト有効(`-SkipPruneVolumes` でスキップ)
 3. WSL2 仮想ディスク(vhdx)圧縮 — fstrim → WSL2シャットダウン → `Optimize-VHD` または `diskpart` で圧縮し、Cドライブの空きを回復(管理者権限が必要)
 4. Windowsの一時ファイル削除（`%TEMP%`, `%TMP%`, `C:\Windows\Temp`）
 5. DNS キャッシュクリア

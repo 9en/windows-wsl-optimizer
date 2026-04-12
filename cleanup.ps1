@@ -11,7 +11,7 @@
     .\cleanup.ps1 -SkipDocker -SkipWsl
     .\cleanup.ps1 -SkipPruneImages       # タグ付きイメージの削除をスキップ
     .\cleanup.ps1 -SkipPruneBuildCache    # ビルドキャッシュの全削除をスキップ
-    .\cleanup.ps1 -PruneVolumes           # Dockerボリュームも削除（データ消失リスクあり）
+    .\cleanup.ps1 -SkipPruneVolumes       # Dockerボリューム削除をスキップ
     .\cleanup.ps1 -Report -Notify         # クリーンアップ後にレポート表示+通知
 #>
 
@@ -25,8 +25,8 @@ param(
     [switch]$PruneImages,
     # Dockerビルドキャッシュの全削除をスキップする（デフォルトで全削除）
     [switch]$SkipPruneBuildCache,
-    # 未使用Dockerボリュームも削除する（停止中コンテナのデータが消えるため要注意）
-    [switch]$PruneVolumes,
+    # 未使用Dockerボリューム削除をスキップする（デフォルトで削除）
+    [switch]$SkipPruneVolumes,
     [switch]$Notify,
     # クリーンアップ後にメモリレポートを表示する
     [switch]$Report
@@ -50,8 +50,13 @@ Write-Host "  $timestamp" -ForegroundColor White
 if ($DryRun) { Write-Host "  [DRY RUN MODE - no changes will be made]" -ForegroundColor Yellow }
 Write-Host ("=" * 60) -ForegroundColor White
 
-# ---- 1. WSL2 ページキャッシュ解放 ----
+# ---- 1. WSL2 ページキャッシュ解放 + ディスククリーンアップ ----
 if (-not $SkipWsl) {
+    # WSL2 ディストロ一覧を取得（セクション全体で再利用）
+    $distros = wsl --list --quiet 2>$null |
+        ForEach-Object { ($_ -replace '\x00', '').Trim() } |
+        Where-Object { $_ -match '^\S+$' }
+
     Write-LogLine -Log $_log step "WSL2 メモリ解放"
     try {
         $vmmem = Get-Process -Name "vmmem", "vmmemWSL" -ErrorAction SilentlyContinue
@@ -59,9 +64,6 @@ if (-not $SkipWsl) {
             if ($DryRun) {
                 Write-LogLine -Log $_log skip "WSL2 ページキャッシュ解放 (dry run)"
             } else {
-                $distros = wsl --list --quiet 2>$null |
-                    ForEach-Object { ($_ -replace '\x00', '').Trim() } |
-                    Where-Object { $_ -match '^\S+$' }
                 foreach ($distro in $distros) {
                     wsl -d $distro --exec sh -c "sync && echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null 2>&1" 2>$null
                     if ($LASTEXITCODE -eq 0) {
@@ -76,6 +78,58 @@ if (-not $SkipWsl) {
         }
     } catch {
         Write-LogLine -Log $_log fail "WSL2操作中にエラー: $_"
+    }
+
+    # WSL2 内部のディスククリーンアップ
+    Write-LogLine -Log $_log step "WSL2 ディスククリーンアップ"
+    try {
+        foreach ($distro in $distros) {
+            if ($DryRun) {
+                Write-LogLine -Log $_log skip "[$distro] WSL2 ディスククリーンアップ (dry run)"
+                continue
+            }
+
+            # systemd ジャーナルログを100MBに縮小
+            wsl -d $distro --exec sudo journalctl --vacuum-size=100M 2>$null | Out-Null
+            Write-LogLine -Log $_log done "[$distro] journalログを100MBに縮小"
+
+            # apt キャッシュクリア + 不要パッケージ削除
+            wsl -d $distro --exec sudo apt clean 2>$null | Out-Null
+            wsl -d $distro --exec sudo apt autoremove -y 2>$null | Out-Null
+            Write-LogLine -Log $_log done "[$distro] aptキャッシュ・不要パッケージを削除"
+
+            # 不要な snap パッケージを削除（WSL2では不要なもの）
+            $snapList = wsl -d $distro --exec snap list 2>$null
+            if ($LASTEXITCODE -eq 0 -and $snapList) {
+                $unneededSnaps = @("ubuntu-desktop-installer")
+                foreach ($snap in $unneededSnaps) {
+                    $hasSnap = wsl -d $distro --exec snap list $snap 2>$null
+                    if ($LASTEXITCODE -eq 0 -and $hasSnap) {
+                        wsl -d $distro --exec sudo snap remove $snap 2>$null | Out-Null
+                        Write-LogLine -Log $_log done "[$distro] snap '$snap' を削除"
+                    }
+                }
+            }
+
+            # VS Code Server の古いバージョンを削除（cli/bin それぞれ最新1つを残す）
+            wsl -d $distro --exec bash -c '
+                for subdir in cli bin; do
+                    dir=~/.vscode-server/$subdir
+                    if [ -d "$dir" ]; then
+                        ls -t "$dir/" 2>/dev/null | tail -n +2 | while read d; do
+                            rm -rf "$dir/$d"
+                        done
+                    fi
+                done
+            ' 2>$null
+            Write-LogLine -Log $_log done "[$distro] VS Code Server の古いバージョンをクリーンアップ"
+
+            # tmp ディレクトリのクリーンアップ
+            wsl -d $distro --exec sudo rm -rf /tmp/* 2>$null
+            Write-LogLine -Log $_log done "[$distro] /tmp をクリア"
+        }
+    } catch {
+        Write-LogLine -Log $_log fail "WSL2 ディスククリーンアップ中にエラー: $_"
     }
 }
 
@@ -126,12 +180,11 @@ if (-not $SkipDocker) {
                     Write-LogLine -Log $_log done "未使用イメージ（タグなし）を削除しました"
                 }
 
-                if ($PruneVolumes) {
-                    Write-Host "   [警告] 未使用ボリュームを削除します。停止中コンテナのデータが失われる可能性があります。" -ForegroundColor Red
+                if ($SkipPruneVolumes) {
+                    Write-LogLine -Log $_log skip "Dockerボリューム削除はスキップ"
+                } else {
                     Invoke-DockerCommand $dockerCmd "volume prune -f" | Out-Null
                     Write-LogLine -Log $_log done "未使用ボリュームを削除しました"
-                } else {
-                    Write-LogLine -Log $_log skip "Dockerボリューム削除はスキップ（有効化: -PruneVolumes）"
                 }
             }
         }
@@ -140,7 +193,7 @@ if (-not $SkipDocker) {
     }
 }
 
-# ---- 3. WSL2 仮想ディスク (vhdx) 圧縮 ----
+# ---- 3. WSL2 仮想ディスク (vhdx) 圧縮 ---- (uses $distros from section 1)
 if (-not $SkipWsl) {
     Write-LogLine -Log $_log step "WSL2 仮想ディスク圧縮"
     try {
@@ -175,9 +228,6 @@ if (-not $SkipWsl) {
             }
         } else {
             # fstrim で未使用ブロックをゼロ埋め（これがないと compact が効かない）
-            $distros = wsl --list --quiet 2>$null |
-                ForEach-Object { ($_ -replace '\x00', '').Trim() } |
-                Where-Object { $_ -match '^\S+$' }
             foreach ($distro in $distros) {
                 Write-Host "   [$distro] fstrim を実行中..." -ForegroundColor White
                 wsl -d $distro --exec sudo fstrim -v / 2>$null
