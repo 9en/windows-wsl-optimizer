@@ -154,7 +154,7 @@ if (-not $SkipWsl) {
             $found = Get-Item $pattern -ErrorAction SilentlyContinue
             if ($found) { $vhdxPaths += $found }
         }
-        $vhdxPaths = $vhdxPaths | Select-Object -Unique
+        $vhdxPaths = @($vhdxPaths | Select-Object -Unique)
 
         if ($vhdxPaths.Count -eq 0) {
             Write-LogLine -Log $_log skip "vhdx ファイルが見つかりません"
