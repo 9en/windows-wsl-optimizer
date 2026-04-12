@@ -188,10 +188,13 @@ if (-not $SkipWsl) {
                 }
             }
 
-            # WSL2 を完全にシャットダウン
+            # WSL2 を完全にシャットダウン（サービスも停止してファイルロックを解除）
             Write-Host "   WSL2 をシャットダウンしています..." -ForegroundColor Yellow
             wsl --shutdown 2>$null
-            Start-Sleep -Seconds 5
+            Start-Sleep -Seconds 3
+            Stop-Service WslService -Force -ErrorAction SilentlyContinue
+            Stop-Service vmcompute -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
 
             # Optimize-VHD (Hyper-V / Windows Pro) または diskpart (Windows Home) で圧縮
             $hasOptimizeVHD = Get-Command Optimize-VHD -ErrorAction SilentlyContinue
@@ -201,9 +204,21 @@ if (-not $SkipWsl) {
                 Write-Host "   圧縮中: $($vhdx.FullName) ($sizeBeforeGB GB)" -ForegroundColor White
 
                 try {
+                    $method = "diskpart"
+                    $compactSuccess = $false
+
+                    # Optimize-VHD を試行（失敗時は diskpart にフォールバック）
                     if ($hasOptimizeVHD) {
-                        Optimize-VHD -Path $vhdx.FullName -Mode Full
-                    } else {
+                        try {
+                            Optimize-VHD -Path $vhdx.FullName -Mode Full -ErrorAction Stop
+                            $method = "Optimize-VHD"
+                            $compactSuccess = $true
+                        } catch {
+                            Write-Host "   Optimize-VHD が失敗しました。diskpart で再試行します..." -ForegroundColor Yellow
+                        }
+                    }
+
+                    if (-not $compactSuccess) {
                         $diskpartScript = @"
 select vdisk file="$($vhdx.FullName)"
 attach vdisk readonly
@@ -214,6 +229,7 @@ detach vdisk
                         Set-Content -Path $tmpFile -Value $diskpartScript -Encoding ASCII
                         diskpart /s $tmpFile 2>&1 | Out-Null
                         Remove-Item $tmpFile -ErrorAction SilentlyContinue
+                        $method = "diskpart"
                     }
 
                     # 圧縮後のサイズを取得
@@ -221,7 +237,6 @@ detach vdisk
                     if ($vhdxAfter) {
                         $sizeAfterGB = [math]::Round($vhdxAfter.Length / 1GB, 1)
                         $freedGB = [math]::Round($sizeBeforeGB - $sizeAfterGB, 1)
-                        $method = if ($hasOptimizeVHD) { "Optimize-VHD" } else { "diskpart" }
                         Write-LogLine -Log $_log done "$($vhdx.Name): $sizeBeforeGB GB → $sizeAfterGB GB (解放: $freedGB GB) [$method]"
                     }
                 } catch {
