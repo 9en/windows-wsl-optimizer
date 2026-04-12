@@ -21,8 +21,8 @@ param(
     [switch]$SkipDocker,
     [switch]$SkipWsl,
     [switch]$SkipWindowsCache,
-    # 未使用Dockerイメージの全削除をスキップする（デフォルトでタグ付き含め全削除）
-    [switch]$SkipPruneImages,
+    # 未使用Dockerイメージを全て削除する（デフォルトはタグなしのみ削除）
+    [switch]$PruneImages,
     # Dockerビルドキャッシュの全削除をスキップする（デフォルトで全削除）
     [switch]$SkipPruneBuildCache,
     # 未使用Dockerボリュームも削除する（停止中コンテナのデータが消えるため要注意）
@@ -118,12 +118,12 @@ if (-not $SkipDocker) {
                 Invoke-DockerCommand $dockerCmd "network prune -f" | Out-Null
                 Write-LogLine -Log $_log done "未使用ネットワークを削除しました"
 
-                if ($SkipPruneImages) {
+                if ($PruneImages) {
+                    Invoke-DockerCommand $dockerCmd "image prune -a -f" | Out-Null
+                    Write-LogLine -Log $_log done "未使用イメージを全て削除しました（タグ付き含む）"
+                } else {
                     Invoke-DockerCommand $dockerCmd "image prune -f" | Out-Null
                     Write-LogLine -Log $_log done "未使用イメージ（タグなし）を削除しました"
-                } else {
-                    Invoke-DockerCommand $dockerCmd "image prune -a -f" | Out-Null
-                    Write-LogLine -Log $_log done "未使用イメージを全て削除しました"
                 }
 
                 if ($PruneVolumes) {
@@ -144,14 +144,14 @@ if (-not $SkipDocker) {
 if (-not $SkipWsl) {
     Write-LogLine -Log $_log step "WSL2 仮想ディスク圧縮"
     try {
-        # vhdx ファイルを検索（複数の既知パスを走査）
-        $vhdxSearchPaths = @(
-            "$env:LOCALAPPDATA\Packages\*\LocalState\ext4.vhdx",
-            "$env:LOCALAPPDATA\Docker\wsl\*\ext4.vhdx"
-        )
+        # vhdx ファイルを検索（複数の既知パスを再帰的に走査）
+        $vhdxSearchDirs = @(
+            "$env:LOCALAPPDATA\Packages",
+            "$env:LOCALAPPDATA\Docker"
+        ) | Where-Object { Test-Path $_ }
         $vhdxPaths = @()
-        foreach ($pattern in $vhdxSearchPaths) {
-            $found = Get-Item $pattern -ErrorAction SilentlyContinue
+        foreach ($dir in $vhdxSearchDirs) {
+            $found = Get-ChildItem -Path $dir -Filter "ext4.vhdx" -Recurse -ErrorAction SilentlyContinue
             if ($found) { $vhdxPaths += $found }
         }
         $vhdxPaths = @($vhdxPaths | Select-Object -Unique)
@@ -164,14 +164,14 @@ if (-not $SkipWsl) {
             Write-LogLine -Log $_log skip "vhdx ファイルが見つかりません"
         } elseif (-not $isAdmin) {
             foreach ($vhdx in $vhdxPaths) {
-                $sizeMB = [math]::Round($vhdx.Length / 1MB, 0)
-                Write-Host "   $($vhdx.FullName) ($sizeMB MB)" -ForegroundColor White
+                $sizeGB = [math]::Round($vhdx.Length / 1GB, 1)
+                Write-Host "   $($vhdx.FullName) ($sizeGB GB)" -ForegroundColor White
             }
             Write-LogLine -Log $_log skip "vhdx 圧縮には管理者権限が必要です。管理者として実行してください"
         } elseif ($DryRun) {
             foreach ($vhdx in $vhdxPaths) {
-                $sizeMB = [math]::Round($vhdx.Length / 1MB, 0)
-                Write-LogLine -Log $_log skip "$($vhdx.FullName) ($sizeMB MB, dry run)"
+                $sizeGB = [math]::Round($vhdx.Length / 1GB, 1)
+                Write-LogLine -Log $_log skip "$($vhdx.FullName) ($sizeGB GB, dry run)"
             }
         } else {
             # fstrim で未使用ブロックをゼロ埋め（これがないと compact が効かない）
@@ -180,7 +180,7 @@ if (-not $SkipWsl) {
                 Where-Object { $_ -match '^\S+$' }
             foreach ($distro in $distros) {
                 Write-Host "   [$distro] fstrim を実行中..." -ForegroundColor White
-                wsl -d $distro --exec sudo fstrim / 2>$null
+                wsl -d $distro --exec sudo fstrim -v / 2>$null
                 if ($LASTEXITCODE -eq 0) {
                     Write-LogLine -Log $_log done "[$distro] fstrim 完了"
                 } else {
@@ -188,33 +188,41 @@ if (-not $SkipWsl) {
                 }
             }
 
-            # WSL2 をシャットダウンしてから圧縮する必要がある
+            # WSL2 を完全にシャットダウン
             Write-Host "   WSL2 をシャットダウンしています..." -ForegroundColor Yellow
             wsl --shutdown 2>$null
-            Start-Sleep -Seconds 3
+            Start-Sleep -Seconds 5
+
+            # Optimize-VHD (Hyper-V / Windows Pro) または diskpart (Windows Home) で圧縮
+            $hasOptimizeVHD = Get-Command Optimize-VHD -ErrorAction SilentlyContinue
 
             foreach ($vhdx in $vhdxPaths) {
-                $sizeBeforeMB = [math]::Round($vhdx.Length / 1MB, 0)
-                Write-Host "   圧縮中: $($vhdx.FullName) ($sizeBeforeMB MB)" -ForegroundColor White
+                $sizeBeforeGB = [math]::Round($vhdx.Length / 1GB, 1)
+                Write-Host "   圧縮中: $($vhdx.FullName) ($sizeBeforeGB GB)" -ForegroundColor White
 
                 try {
-                    $diskpartScript = @"
+                    if ($hasOptimizeVHD) {
+                        Optimize-VHD -Path $vhdx.FullName -Mode Full
+                    } else {
+                        $diskpartScript = @"
 select vdisk file="$($vhdx.FullName)"
 attach vdisk readonly
 compact vdisk
 detach vdisk
 "@
-                    $tmpFile = [System.IO.Path]::GetTempFileName()
-                    Set-Content -Path $tmpFile -Value $diskpartScript -Encoding ASCII
-                    diskpart /s $tmpFile 2>&1 | Out-Null
-                    Remove-Item $tmpFile -ErrorAction SilentlyContinue
+                        $tmpFile = [System.IO.Path]::GetTempFileName()
+                        Set-Content -Path $tmpFile -Value $diskpartScript -Encoding ASCII
+                        diskpart /s $tmpFile 2>&1 | Out-Null
+                        Remove-Item $tmpFile -ErrorAction SilentlyContinue
+                    }
 
                     # 圧縮後のサイズを取得
                     $vhdxAfter = Get-Item $vhdx.FullName -ErrorAction SilentlyContinue
                     if ($vhdxAfter) {
-                        $sizeAfterMB = [math]::Round($vhdxAfter.Length / 1MB, 0)
-                        $freedMB = $sizeBeforeMB - $sizeAfterMB
-                        Write-LogLine -Log $_log done "$($vhdx.Name): $sizeBeforeMB MB → $sizeAfterMB MB (解放: $freedMB MB)"
+                        $sizeAfterGB = [math]::Round($vhdxAfter.Length / 1GB, 1)
+                        $freedGB = [math]::Round($sizeBeforeGB - $sizeAfterGB, 1)
+                        $method = if ($hasOptimizeVHD) { "Optimize-VHD" } else { "diskpart" }
+                        Write-LogLine -Log $_log done "$($vhdx.Name): $sizeBeforeGB GB → $sizeAfterGB GB (解放: $freedGB GB) [$method]"
                     }
                 } catch {
                     Write-LogLine -Log $_log fail "$($vhdx.Name) の圧縮に失敗: $_"

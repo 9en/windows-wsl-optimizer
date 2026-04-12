@@ -223,20 +223,20 @@ Slackに通知が届けば設定完了です。
 .\cleanup.ps1 -SkipWsl              # WSL2のキャッシュ解放をスキップ
 .\cleanup.ps1 -SkipDocker           # Docker関連の削除をスキップ
 .\cleanup.ps1 -SkipWindowsCache     # Windows一時ファイル/DNS削除をスキップ
-.\cleanup.ps1 -SkipPruneImages      # Dockerイメージはタグなしのみ削除（タグ付きは残す）
 .\cleanup.ps1 -SkipPruneBuildCache  # ビルドキャッシュは最近使用分を保持
 
-# Dockerボリュームも削除（デフォルト無効、データ消失リスクあり）
-.\cleanup.ps1 -PruneVolumes
+# 追加の削除オプション（デフォルト無効）
+.\cleanup.ps1 -PruneImages          # 未使用Dockerイメージを全て削除（タグ付き含む）
+.\cleanup.ps1 -PruneVolumes         # 未使用Dockerボリュームも削除（データ消失リスクあり）
 ```
 
 実行内容:
 1. WSL2 ページキャッシュ解放 (`echo 3 > /proc/sys/vm/drop_caches`)
-2. Docker: 停止コンテナ・未使用イメージ(全て)・ビルドキャッシュ(全て)・ネットワーク削除 + ディスク使用量表示
-   - イメージ全削除をスキップ: `-SkipPruneImages`(タグなしのみ削除)
+2. Docker: 停止コンテナ・未使用イメージ(タグなし)・ビルドキャッシュ(全て)・ネットワーク削除 + ディスク使用量表示
+   - タグ付きイメージも全削除: `-PruneImages`
    - ビルドキャッシュ全削除をスキップ: `-SkipPruneBuildCache`(最近使用分は保持)
    - ボリューム削除はデフォルト無効(`-PruneVolumes` で有効化)
-3. WSL2 仮想ディスク(vhdx)圧縮 — WSL2をシャットダウンして `diskpart` で圧縮し、Cドライブの空きを回復
+3. WSL2 仮想ディスク(vhdx)圧縮 — fstrim → WSL2シャットダウン → `Optimize-VHD` または `diskpart` で圧縮し、Cドライブの空きを回復(管理者権限が必要)
 4. Windowsの一時ファイル削除（`%TEMP%`, `%TMP%`, `C:\Windows\Temp`）
 5. DNS キャッシュクリア
 6. 高メモリプロセスの表示のみ（自動停止はしない）
