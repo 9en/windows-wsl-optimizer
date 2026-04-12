@@ -223,7 +223,13 @@ Slackに通知が届けば設定完了です。
 .\cleanup.ps1 -SkipDocker -SkipWsl
 .\cleanup.ps1 -SkipWindowsCache
 
-# Dockerボリュームも削除する（停止中コンテナのデータが消えるため要注意）
+# タグ付き未使用イメージの削除をスキップ（デフォルトで全削除）
+.\cleanup.ps1 -SkipPruneImages
+
+# ビルドキャッシュの全削除をスキップ（デフォルトで全削除）
+.\cleanup.ps1 -SkipPruneBuildCache
+
+# 未使用Dockerボリュームも削除する（デフォルト無効、データ消失リスクあり）
 .\cleanup.ps1 -PruneVolumes
 
 # クリーンアップ後にメモリレポートも表示
@@ -232,8 +238,10 @@ Slackに通知が届けば設定完了です。
 
 実行内容:
 1. WSL2 ページキャッシュ解放 (`echo 3 > /proc/sys/vm/drop_caches`)
-2. Docker: 停止コンテナ・未使用イメージ・ビルドキャッシュ・ネットワーク削除
-   - ボリューム削除はデフォルト**無効**（`-PruneVolumes` で有効化）
+2. Docker: 停止コンテナ・未使用イメージ(全て)・ビルドキャッシュ(全て)・ネットワーク削除 + ディスク使用量表示
+   - イメージ全削除をスキップ: `-SkipPruneImages`(タグなしのみ削除)
+   - ビルドキャッシュ全削除をスキップ: `-SkipPruneBuildCache`(最近使用分は保持)
+   - ボリューム削除はデフォルト無効(`-PruneVolumes` で有効化)
 3. Windowsの一時ファイル削除（`%TEMP%`, `%TMP%`, `C:\Windows\Temp`）
 4. DNS キャッシュクリア
 5. 高メモリプロセスの表示のみ（自動停止はしない）
