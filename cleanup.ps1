@@ -50,7 +50,7 @@ Write-Host "  $timestamp" -ForegroundColor White
 if ($DryRun) { Write-Host "  [DRY RUN MODE - no changes will be made]" -ForegroundColor Yellow }
 Write-Host ("=" * 60) -ForegroundColor White
 
-# ---- 1. WSL2 ページキャッシュ解放 + ディスククリーンアップ ----
+# ---- 1. WSL2 ページキャッシュ解放 ----
 if (-not $SkipWsl) {
     # WSL2 ディストロ一覧を取得（セクション全体で再利用）
     $distros = wsl --list --quiet 2>$null |
@@ -80,81 +80,6 @@ if (-not $SkipWsl) {
         Write-LogLine -Log $_log fail "WSL2操作中にエラー: $_"
     }
 
-    # WSL2 内部のディスククリーンアップ
-    Write-LogLine -Log $_log step "WSL2 ディスククリーンアップ"
-    try {
-        foreach ($distro in $distros) {
-            # 各項目のサイズを取得して表示する関数
-            $getSizeMB = { param($path) [math]::Round([decimal](wsl -d $distro --exec bash -c "du -sm $path 2>/dev/null | cut -f1" 2>$null), 0) }
-
-            # systemd ジャーナルログを100MBに縮小
-            $journalMB = & $getSizeMB "/var/log/journal"
-            if ($DryRun) {
-                Write-LogLine -Log $_log skip "[$distro] journalログ ($journalMB MB → 100MB に縮小予定)"
-            } else {
-                wsl -d $distro --exec sudo journalctl --vacuum-size=100M 2>$null | Out-Null
-                Write-LogLine -Log $_log done "[$distro] journalログを100MBに縮小 (${journalMB}MB → 100MB)"
-            }
-
-            # apt キャッシュクリア + 不要パッケージ削除
-            $cacheMB = & $getSizeMB "/var/cache/apt"
-            if ($DryRun) {
-                Write-LogLine -Log $_log skip "[$distro] aptキャッシュ ($cacheMB MB 削除予定)"
-            } else {
-                wsl -d $distro --exec sudo apt clean 2>$null | Out-Null
-                wsl -d $distro --exec sudo apt autoremove -y 2>$null | Out-Null
-                Write-LogLine -Log $_log done "[$distro] aptキャッシュ・不要パッケージを削除 ($cacheMB MB)"
-            }
-
-            # 不要な snap パッケージを削除（WSL2では不要なもの）
-            $snapList = wsl -d $distro --exec snap list 2>$null
-            if ($LASTEXITCODE -eq 0 -and $snapList) {
-                $unneededSnaps = @("ubuntu-desktop-installer")
-                foreach ($snap in $unneededSnaps) {
-                    $hasSnap = wsl -d $distro --exec snap list $snap 2>$null
-                    if ($LASTEXITCODE -eq 0 -and $hasSnap) {
-                        $snapMB = & $getSizeMB "/snap/$snap"
-                        if ($DryRun) {
-                            Write-LogLine -Log $_log skip "[$distro] snap '$snap' ($snapMB MB 削除予定)"
-                        } else {
-                            wsl -d $distro --exec sudo snap remove $snap 2>$null | Out-Null
-                            Write-LogLine -Log $_log done "[$distro] snap '$snap' を削除 ($snapMB MB)"
-                        }
-                    }
-                }
-            }
-
-            # VS Code Server の古いバージョンを削除（cli/bin それぞれ最新1つを残す）
-            $vscodeMB = & $getSizeMB "~/.vscode-server"
-            $vscodeRemoteMB = & $getSizeMB "~/.vscode-remote-containers"
-            if ($DryRun) {
-                Write-LogLine -Log $_log skip "[$distro] VS Code Server ($vscodeMB MB) + remote-containers ($vscodeRemoteMB MB) 古いバージョン削除予定"
-            } else {
-                wsl -d $distro --exec bash -c '
-                    for subdir in cli bin; do
-                        dir=~/.vscode-server/$subdir
-                        if [ -d "$dir" ]; then
-                            ls -t "$dir/" 2>/dev/null | tail -n +2 | while read d; do
-                                rm -rf "$dir/$d"
-                            done
-                        fi
-                    done
-                ' 2>$null
-                Write-LogLine -Log $_log done "[$distro] VS Code Server の古いバージョンをクリーンアップ"
-            }
-
-            # tmp ディレクトリのクリーンアップ
-            $tmpMB = & $getSizeMB "/tmp"
-            if ($DryRun) {
-                Write-LogLine -Log $_log skip "[$distro] /tmp ($tmpMB MB 削除予定)"
-            } else {
-                wsl -d $distro --exec sudo rm -rf /tmp/* 2>$null
-                Write-LogLine -Log $_log done "[$distro] /tmp をクリア ($tmpMB MB)"
-            }
-        }
-    } catch {
-        Write-LogLine -Log $_log fail "WSL2 ディスククリーンアップ中にエラー: $_"
-    }
 }
 
 # ---- 2. Docker キャッシュクリア ----
