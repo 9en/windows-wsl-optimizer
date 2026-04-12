@@ -9,7 +9,10 @@
     .\cleanup.ps1
     .\cleanup.ps1 -DryRun
     .\cleanup.ps1 -SkipDocker -SkipWsl
-    .\cleanup.ps1 -PruneVolumes   # Dockerボリュームも削除（データ消失リスクあり）
+    .\cleanup.ps1 -SkipPruneImages       # タグ付きイメージの削除をスキップ
+    .\cleanup.ps1 -SkipPruneBuildCache    # ビルドキャッシュの全削除をスキップ
+    .\cleanup.ps1 -PruneVolumes           # Dockerボリュームも削除（データ消失リスクあり）
+    .\cleanup.ps1 -Report -Notify         # クリーンアップ後にレポート表示+通知
 #>
 
 [CmdletBinding()]
@@ -18,7 +21,11 @@ param(
     [switch]$SkipDocker,
     [switch]$SkipWsl,
     [switch]$SkipWindowsCache,
-    # 未使用Dockerボリュームを削除する（停止中コンテナのデータも消えるため要注意）
+    # 未使用Dockerイメージの全削除をスキップする（デフォルトでタグ付き含め全削除）
+    [switch]$SkipPruneImages,
+    # Dockerビルドキャッシュの全削除をスキップする（デフォルトで全削除）
+    [switch]$SkipPruneBuildCache,
+    # 未使用Dockerボリュームも削除する（停止中コンテナのデータが消えるため要注意）
     [switch]$PruneVolumes,
     [switch]$Notify,
     # クリーンアップ後にメモリレポートを表示する
@@ -51,10 +58,16 @@ if (-not $SkipWsl) {
             if ($DryRun) {
                 Write-LogLine -Log $_log skip "WSL2 ページキャッシュ解放 (dry run)"
             } else {
-                $distros = wsl --list --quiet 2>$null | Where-Object { $_ -match '\S' }
+                $distros = wsl --list --quiet 2>$null |
+                    ForEach-Object { ($_ -replace '\x00', '').Trim() } |
+                    Where-Object { $_ -match '^\S+$' }
                 foreach ($distro in $distros) {
-                    wsl -d $distro.Trim() --exec sh -c "sync && echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null 2>&1" 2>$null
-                    Write-LogLine -Log $_log done "[$distro] ページキャッシュを解放しました"
+                    wsl -d $distro --exec sh -c "sync && echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null 2>&1" 2>$null
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-LogLine -Log $_log done "[$distro] ページキャッシュを解放しました"
+                    } else {
+                        Write-LogLine -Log $_log fail "[$distro] ページキャッシュ解放に失敗しました"
+                    }
                 }
             }
         } else {
@@ -73,20 +86,46 @@ if (-not $SkipDocker) {
             Write-LogLine -Log $_log skip "Docker がインストールされていません"
         } elseif (-not (docker info 2>$null) -or $LASTEXITCODE -ne 0) {
             Write-LogLine -Log $_log skip "Docker は起動していません"
-        } elseif ($DryRun) {
-            Write-LogLine -Log $_log skip "Docker prune (dry run)"
         } else {
-            docker container prune -f 2>$null | Out-Null; Write-LogLine -Log $_log done "停止コンテナを削除しました"
-            docker image     prune -f 2>$null | Out-Null; Write-LogLine -Log $_log done "未使用イメージ（タグなし）を削除しました"
-            docker builder   prune -f 2>$null | Out-Null; Write-LogLine -Log $_log done "ビルドキャッシュを削除しました"
-            docker network   prune -f 2>$null | Out-Null; Write-LogLine -Log $_log done "未使用ネットワークを削除しました"
+            # ディスク使用量を表示
+            $dfOutput = docker system df 2>$null
+            if ($dfOutput) {
+                Write-Host "   [Docker ディスク使用量]" -ForegroundColor White
+                $dfOutput | ForEach-Object { Write-Host "   $_" }
+                $_log.Add("[Docker ディスク使用量]")
+                $dfOutput | ForEach-Object { $_log.Add("  $_") }
+            }
 
-            if ($PruneVolumes) {
-                Write-Host "   [警告] 未使用ボリュームを削除します。停止中コンテナのデータが失われる可能性があります。" -ForegroundColor Red
-                docker volume prune -f 2>$null | Out-Null
-                Write-LogLine -Log $_log done "未使用ボリュームを削除しました"
+            if ($DryRun) {
+                Write-LogLine -Log $_log skip "Docker prune (dry run)"
             } else {
-                Write-LogLine -Log $_log skip "Dockerボリューム削除はスキップ（データ保護のためデフォルト無効。有効化: -PruneVolumes）"
+                docker container prune -f 2>$null | Out-Null; Write-LogLine -Log $_log done "停止コンテナを削除しました"
+
+                if ($SkipPruneBuildCache) {
+                    docker builder prune -f 2>$null | Out-Null
+                    Write-LogLine -Log $_log done "未使用ビルドキャッシュを削除しました（最近使用分は保持）"
+                } else {
+                    docker builder prune -a -f 2>$null | Out-Null
+                    Write-LogLine -Log $_log done "ビルドキャッシュを全て削除しました"
+                }
+
+                docker network prune -f 2>$null | Out-Null; Write-LogLine -Log $_log done "未使用ネットワークを削除しました"
+
+                if ($SkipPruneImages) {
+                    docker image prune -f 2>$null | Out-Null
+                    Write-LogLine -Log $_log done "未使用イメージ（タグなし）を削除しました"
+                } else {
+                    docker image prune -a -f 2>$null | Out-Null
+                    Write-LogLine -Log $_log done "未使用イメージを全て削除しました"
+                }
+
+                if ($PruneVolumes) {
+                    Write-Host "   [警告] 未使用ボリュームを削除します。停止中コンテナのデータが失われる可能性があります。" -ForegroundColor Red
+                    docker volume prune -f 2>$null | Out-Null
+                    Write-LogLine -Log $_log done "未使用ボリュームを削除しました"
+                } else {
+                    Write-LogLine -Log $_log skip "Dockerボリューム削除はスキップ（有効化: -PruneVolumes）"
+                }
             }
         }
     } catch {
