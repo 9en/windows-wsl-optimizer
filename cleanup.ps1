@@ -156,14 +156,38 @@ if (-not $SkipWsl) {
         }
         $vhdxPaths = @($vhdxPaths | Select-Object -Unique)
 
+        $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator
+        )
+
         if ($vhdxPaths.Count -eq 0) {
             Write-LogLine -Log $_log skip "vhdx ファイルが見つかりません"
+        } elseif (-not $isAdmin) {
+            foreach ($vhdx in $vhdxPaths) {
+                $sizeMB = [math]::Round($vhdx.Length / 1MB, 0)
+                Write-Host "   $($vhdx.FullName) ($sizeMB MB)" -ForegroundColor White
+            }
+            Write-LogLine -Log $_log skip "vhdx 圧縮には管理者権限が必要です。管理者として実行してください"
         } elseif ($DryRun) {
             foreach ($vhdx in $vhdxPaths) {
                 $sizeMB = [math]::Round($vhdx.Length / 1MB, 0)
                 Write-LogLine -Log $_log skip "$($vhdx.FullName) ($sizeMB MB, dry run)"
             }
         } else {
+            # fstrim で未使用ブロックをゼロ埋め（これがないと compact が効かない）
+            $distros = wsl --list --quiet 2>$null |
+                ForEach-Object { ($_ -replace '\x00', '').Trim() } |
+                Where-Object { $_ -match '^\S+$' }
+            foreach ($distro in $distros) {
+                Write-Host "   [$distro] fstrim を実行中..." -ForegroundColor White
+                wsl -d $distro --exec sudo fstrim / 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    Write-LogLine -Log $_log done "[$distro] fstrim 完了"
+                } else {
+                    Write-LogLine -Log $_log fail "[$distro] fstrim 失敗（sudo権限を確認してください）"
+                }
+            }
+
             # WSL2 をシャットダウンしてから圧縮する必要がある
             Write-Host "   WSL2 をシャットダウンしています..." -ForegroundColor Yellow
             wsl --shutdown 2>$null
