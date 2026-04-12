@@ -1,16 +1,16 @@
-# windows-memory-optimizer
+# windows-wsl-optimizer
 
-WSL2・devcontainer環境向け Windowsメモリ監視・最適化ツールキット
+WSL2・Docker環境向け Windows メモリ・ディスク最適化ツールキット
 
 ## 概要
 
-WSL2やDocker Desktop(devcontainer)を多用する開発環境でWindowsのメモリ使用量を
+WSL2やDocker(devcontainer)を多用する開発環境でWindowsのメモリ使用量とディスク容量を
 監視・可視化・最適化するPowerShellスクリプト集です。
 
 ## ファイル構成
 
 ```
-windows-memory-optimizer/
+windows-wsl-optimizer/
 ├── setup.ps1       — 初期セットアップ（.wslconfig生成・タスクスケジューラ登録）
 ├── report.ps1      — メモリ使用状況レポート表示
 ├── cleanup.ps1     — ワンコマンドクリーンアップ
@@ -57,8 +57,8 @@ winget install --id Git.Git -e --source winget
 
 ```powershell
 cd $HOME
-git clone https://github.com/9en/windows-memory-optimizer.git
-cd windows-memory-optimizer
+git clone https://github.com/9en/windows-wsl-optimizer.git
+cd windows-wsl-optimizer
 ```
 
 > **注意:** フォルダを移動するとタスクスケジューラの登録が壊れます。
