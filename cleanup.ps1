@@ -9,7 +9,10 @@
     .\cleanup.ps1
     .\cleanup.ps1 -DryRun
     .\cleanup.ps1 -SkipDocker -SkipWsl
-    .\cleanup.ps1 -PruneVolumes   # Dockerボリュームも削除（データ消失リスクあり）
+    .\cleanup.ps1 -SkipPruneImages       # タグ付きイメージの削除をスキップ
+    .\cleanup.ps1 -SkipPruneBuildCache    # ビルドキャッシュの全削除をスキップ
+    .\cleanup.ps1 -PruneVolumes           # Dockerボリュームも削除（データ消失リスクあり）
+    .\cleanup.ps1 -Report -Notify         # クリーンアップ後にレポート表示+通知
 #>
 
 [CmdletBinding()]

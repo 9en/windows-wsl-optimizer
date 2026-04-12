@@ -5,8 +5,8 @@
 .DESCRIPTION
     以下を実行します:
       1. .wslconfig の自動生成・調整 (WSL2メモリ上限設定)
-      2. タスクスケジューラへの定期実行登録 (report + cleanup)
-      3. 環境変数 SLACK_BOT_TOKEN / SLACK_CHANNEL の保存
+      2. 環境変数 SLACK_BOT_TOKEN / SLACK_CHANNEL の保存
+      3. タスクスケジューラへの定期実行登録 (cleanup → report → 通知)
 .EXAMPLE
     # 管理者権限のPowerShellで実行してください
     .\setup.ps1
@@ -23,7 +23,6 @@ param(
     [string]$SlackToken,
     # Slack 投稿先チャンネル (#general など) （省略可）
     [string]$SlackChannel,
-    # タスクスケジューラ: report を実行する時刻 (HH:mm)
     # タスクスケジューラ: 実行時刻 (HH:mm)
     [string]$ScheduleTime = "20:00",
     # タスクスケジューラ登録をスキップ
