@@ -6,9 +6,7 @@
     以下を実行します:
       1. .wslconfig の自動生成・調整 (WSL2メモリ上限設定)
       2. 環境変数 SLACK_BOT_TOKEN / SLACK_CHANNEL の保存
-      3. タスクスケジューラへの定期実行登録 (cleanup → report → 通知)
 .EXAMPLE
-    # 管理者権限のPowerShellで実行してください
     .\setup.ps1
     .\setup.ps1 -WslMemoryGB 8 -SlackToken "xoxb-..." -SlackChannel "#general"
 #>
@@ -23,10 +21,6 @@ param(
     [string]$SlackToken,
     # Slack 投稿先チャンネル (#general など) （省略可）
     [string]$SlackChannel,
-    # タスクスケジューラ: 実行時刻 (HH:mm)
-    [string]$ScheduleTime = "20:00",
-    # タスクスケジューラ登録をスキップ
-    [switch]$SkipScheduler,
     # .wslconfig 生成をスキップ
     [switch]$SkipWslConfig,
     # 現在の設定状態を表示して終了
@@ -35,13 +29,6 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
-
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator
-)
-if (-not $isAdmin) {
-    Write-Warning "管理者権限で実行することを推奨します（タスクスケジューラ登録に必要です）"
-}
 
 Write-Host ("=" * 60)
 Write-Host "  Windows Memory Optimizer - Setup"
@@ -73,30 +60,13 @@ if ($Status) {
         Write-Host "  SLACK_CHANNEL   : 未設定" -ForegroundColor Yellow
     }
 
-    Write-Host "`n[タスクスケジューラ]" -ForegroundColor Cyan
-    $task = Get-ScheduledTask -TaskName "MemoryOptimizer" -ErrorAction SilentlyContinue
-    if ($task) {
-        $info = $task | Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
-        Write-Host "  状態           : $($task.State)" -ForegroundColor Green
-        Write-Host "  トリガー       : $($task.Triggers[0].StartBoundary)" -ForegroundColor Green
-        Write-Host "  実行コマンド   : $($task.Actions[0].Arguments)" -ForegroundColor Green
-        if ($info.LastRunTime -and $info.LastRunTime -ne [datetime]::MinValue) {
-            Write-Host "  前回実行       : $($info.LastRunTime)" -ForegroundColor Green
-            Write-Host "  前回結果       : $($info.LastTaskResult)" -ForegroundColor Green
-        } else {
-            Write-Host "  前回実行       : まだ実行されていません" -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "  未登録" -ForegroundColor Yellow
-    }
-
     Write-Host ""
     return
 }
 
 # ---- 1. .wslconfig 生成・調整 ----
 if (-not $SkipWslConfig) {
-    Write-Host "`n[1/3] .wslconfig を設定します" -ForegroundColor Cyan
+    Write-Host "`n[1/2] .wslconfig を設定します" -ForegroundColor Cyan
 
     $wslConfigPath = "$env:USERPROFILE\.wslconfig"
     $os      = Get-CimInstance Win32_OperatingSystem
@@ -145,7 +115,7 @@ localhostForwarding=true
 }
 
 # ---- 2. Slack 設定 ----
-Write-Host "`n[2/3] Slack 通知設定" -ForegroundColor Cyan
+Write-Host "`n[2/2] Slack 通知設定" -ForegroundColor Cyan
 
 if ($SlackToken) {
     [System.Environment]::SetEnvironmentVariable("SLACK_BOT_TOKEN", $SlackToken, "User")
@@ -167,37 +137,11 @@ if ($SlackChannel) {
     Write-Host '   後から設定: [System.Environment]::SetEnvironmentVariable("SLACK_CHANNEL", "#general", "User")' -ForegroundColor White
 }
 
-# ---- 3. タスクスケジューラ登録 ----
-if (-not $SkipScheduler) {
-    Write-Host "`n[3/3] タスクスケジューラに定期実行を登録します" -ForegroundColor Cyan
-
-    if (-not $isAdmin) {
-        Write-Warning "タスクスケジューラ登録には管理者権限が必要です。スキップします。"
-        Write-Host "   管理者権限で再実行するか -SkipScheduler を指定してください。" -ForegroundColor Yellow
-    } else {
-        $pwshCmd = Get-Command pwsh       -ErrorAction SilentlyContinue
-        $ps5Cmd  = Get-Command powershell -ErrorAction SilentlyContinue
-        $pwsh = if ($pwshCmd) { $pwshCmd.Source } elseif ($ps5Cmd) { $ps5Cmd.Source } else { "powershell.exe" }
-
-        # 旧タスクがあれば削除
-        foreach ($old in @("MemoryOptimizer-Report", "MemoryOptimizer-Cleanup")) {
-            Unregister-ScheduledTask -TaskName $old -Confirm:$false -ErrorAction SilentlyContinue
-        }
-
-        $taskName = "MemoryOptimizer"
-        try {
-            Register-ScheduledTask `
-                -TaskName    $taskName `
-                -Action      (New-ScheduledTaskAction -Execute $pwsh -Argument "-NonInteractive -NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\cleanup.ps1`" -Report -Notify") `
-                -Trigger     (New-ScheduledTaskTrigger -Daily -At $ScheduleTime) `
-                -Settings    (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew -StartWhenAvailable) `
-                -Description "windows-wsl-optimizer: 毎日 $ScheduleTime にクリーンアップ→レポート生成・通知" `
-                -RunLevel    Highest | Out-Null
-            Write-Host "   [$taskName] 毎日 $ScheduleTime に登録しました（クリーンアップ→レポート→通知）" -ForegroundColor Green
-        } catch {
-            Write-Host "   [$taskName] 登録失敗: $_" -ForegroundColor Red
-        }
-    }
+# ---- 既存のスケジュールタスクを削除 ----
+$existingTask = Get-ScheduledTask -TaskName "MemoryOptimizer" -ErrorAction SilentlyContinue
+if ($existingTask) {
+    Unregister-ScheduledTask -TaskName "MemoryOptimizer" -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Host "`n[情報] 既存のタスクスケジューラ登録 (MemoryOptimizer) を削除しました" -ForegroundColor Yellow
 }
 
 # ---- 完了 ----
@@ -211,13 +155,23 @@ Write-Host @"
   1. WSL2 を再起動して .wslconfig を反映する
        wsl --shutdown
 
-  2. メモリレポートを今すぐ確認する
+  2. メモリレポートを確認する
        .\report.ps1
 
-  3. クリーンアップを今すぐ実行する
-       .\cleanup.ps1
-
-  4. 通知テスト
+  3. 通知テスト
        .\notify.ps1 -Message "テスト通知"
+
+手動クリーンアップの実行方法:
+  # 基本（クリーンアップ + レポート + Slack通知）
+  .\cleanup.ps1 -Report -Notify
+
+  # WSL2を停止せずに実行（WSL作業中に推奨）
+  .\cleanup.ps1 -SkipWsl -Report -Notify
+
+  # 事前確認（実際には何も変更しない）
+  .\cleanup.ps1 -DryRun
+
+  # Docker削除もスキップ
+  .\cleanup.ps1 -SkipDocker -SkipWsl -Report -Notify
 
 "@
