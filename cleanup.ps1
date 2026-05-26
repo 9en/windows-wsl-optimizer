@@ -132,8 +132,8 @@ if (-not $SkipDocker) {
                 if ($SkipPruneVolumes) {
                     Write-LogLine -Log $_log skip "Dockerボリューム削除はスキップ"
                 } else {
-                    Invoke-DockerCommand $dockerCmd "volume prune -f" | Out-Null
-                    Write-LogLine -Log $_log done "未使用ボリュームを削除しました"
+                    Invoke-DockerCommand $dockerCmd "volume prune -a -f" | Out-Null
+                    Write-LogLine -Log $_log done "未使用ボリュームを全て削除しました（ラベル付き含む）"
                 }
             }
         }
